@@ -13,7 +13,7 @@ def cosine_similarity(vektor_a, vektor_b):
 # Echte Jobs von der Bundesagentur für Arbeit API holen
 url = "https://rest.arbeitsagentur.de/jobboerse/jobsuche-service/pc/v4/app/jobs"
 headers = {"X-API-Key": "jobboerse-jobsuche"}
-params = {"was": "Konstrukteur", "wo": "Berlin", "page": 1, "size": 10}
+params = {"was": "", "wo": "Berlin", "page": 1, "size": 10}
 
 response = requests.get(url, headers=headers, params=params)
 daten = response.json()
@@ -24,7 +24,7 @@ for job in daten["stellenangebote"]:
     job_texte.append(text_string)
 
 # Unser Nutzerprofil (aus dem Chat geparst)
-nutzerprofil_text = "Master im Maschinenbau, 2 Jahre Werkstudent in der Schiffskonstruktion, CAD, Deutsch, Englisch, Schiffskonstruktion, Produktion"
+nutzerprofil_text = "Master im Maschinenbau, 5 Jahre Berufserfahrung, CAD, MS-Office, Autodesk Inventor, Autodesk Vault, Autodesk AutoCAD, Creo Parametric, Atlassian Jira, Microsoft Navision Deutsch"
 
 profil_embedding = model.encode(nutzerprofil_text)
 
