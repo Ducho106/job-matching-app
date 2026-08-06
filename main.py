@@ -57,6 +57,7 @@ class NutzerProfil(BaseModel):
     profil_text: str
     fachbereich: list[str]
     nutzer_id : int
+    ort: str
 
 class ChatNachricht(BaseModel):
     nachricht: str
@@ -64,8 +65,8 @@ class ChatNachricht(BaseModel):
 
 client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 
-async def suche_jobs(client, headers, fachbereich):
-    params = {"was": fachbereich, "wo": "Berlin", "page": 1, "size": 10}
+async def suche_jobs(client, headers, fachbereich, ort):
+    params = {"was": fachbereich, "wo": ort, "page": 1, "size": 10}
     url = f"https://rest.arbeitsagentur.de/jobboerse/jobsuche-service/pc/v6/jobs"
     response = await client.get(url, headers=headers, params=params)
     return response.json()
@@ -139,7 +140,7 @@ async def finde_jobs(profil: NutzerProfil):
     logger.info(f"Matching-Anfrage für Nutzer {profil.nutzer_id}")
     
     async with httpx.AsyncClient() as client:
-        aufgaben_suche = [suche_jobs(client,headers, fach) for fach in profil.fachbereich ]
+        aufgaben_suche = [suche_jobs(client,headers, fach, profil.ort) for fach in profil.fachbereich]
         alle_suchergebnisse = await asyncio.gather(*aufgaben_suche)
 
         alle_stellenangebote = []
@@ -161,7 +162,10 @@ async def finde_jobs(profil: NutzerProfil):
 
     for basis, detail in zip(alle_stellenangebote, alle_details):
             beschreibung = detail.get("stellenangebotsBeschreibung", "")
-            text_string = f"{basis['hauptberuf']} - {basis['stellenangebotsTitel']}, bei {basis['firma']}, {beschreibung}"
+            beruf = basis.get("hauptberuf", "")
+            titel = basis.get("stellenangebotsTitel", "")
+            firma = basis.get("firma", "")
+            text_string = f"{beruf} - {titel}, bei {firma}, {beschreibung}"
             job_texte.append(text_string)
 
     rechts_geswipte_jobs = hole_swipe_jobs(profil.nutzer_id, "rechts")
