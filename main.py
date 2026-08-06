@@ -13,11 +13,16 @@ import base64
 import asyncio
 import httpx
 from dotenv import load_dotenv 
+import logging
 
 load_dotenv()
 
 Base = declarative_base()
-engine = create_engine("postgresql://localhost/job_matching_db")
+DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://localhost/job_matching_db")
+engine = create_engine(DATABASE_URL)
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 class Nutzer(Base):
     __tablename__ = "nutzer"
@@ -61,7 +66,7 @@ client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 
 async def suche_jobs(client, headers, fachbereich):
     params = {"was": fachbereich, "wo": "Berlin", "page": 1, "size": 10}
-    url = f"https://rest.arbeitsagentur.de/jobboerse/jobsuche-service/pc/v4/app/jobs"
+    url = f"https://rest.arbeitsagentur.de/jobboerse/jobsuche-service/pc/v6/jobs"
     response = await client.get(url, headers=headers, params=params)
     return response.json()
 
@@ -121,8 +126,8 @@ def durchschnittliche_aehnlichkeit(neuer_job_text, bisherige_jobs):
     durchschnitt = sum(aehnlichkeiten) / len(aehnlichkeiten)
     return durchschnitt 
 
-async def hole_jobdetails(client, refnr, headers):
-    kodiert = base64.b64encode(refnr.encode()).decode()
+async def hole_jobdetails(client, referenznummer, headers):
+    kodiert = base64.b64encode(referenznummer.encode()).decode()
     url = f"https://rest.arbeitsagentur.de/jobboerse/jobsuche-service/pc/v4/jobdetails/{kodiert}"
     response = await client.get(url, headers=headers)
     return response.json()
@@ -131,6 +136,7 @@ async def hole_jobdetails(client, refnr, headers):
 
 async def finde_jobs(profil: NutzerProfil):
     headers = {"X-API-Key": "jobboerse-jobsuche"}
+    logger.info(f"Matching-Anfrage für Nutzer {profil.nutzer_id}")
     
     async with httpx.AsyncClient() as client:
         aufgaben_suche = [suche_jobs(client,headers, fach) for fach in profil.fachbereich ]
@@ -140,20 +146,22 @@ async def finde_jobs(profil: NutzerProfil):
         gesehene_refnrs = set()
 
         for suchergebnis in alle_suchergebnisse:
-            if "stellenangebote" in suchergebnis:
-                for job in suchergebnis["stellenangebote"]:
-                    if job["refnr"] not in gesehene_refnrs:
+            if "ergebnisliste" in suchergebnis:
+                for job in suchergebnis["ergebnisliste"]:
+                    if job["referenznummer"] not in gesehene_refnrs:
                         alle_stellenangebote.append(job)
-                        gesehene_refnrs.add(job["refnr"])
+                        gesehene_refnrs.add(job["referenznummer"])
+
+        logger.info(f"{len(alle_stellenangebote)} Jobs gefunden (nach Duplikat-Filterung)")
                 
-        aufgaben = [hole_jobdetails(client, job["refnr"], headers) for job in alle_stellenangebote]
+        aufgaben = [hole_jobdetails(client, job["referenznummer"], headers) for job in alle_stellenangebote]
         alle_details = await asyncio.gather(*aufgaben)
        
     job_texte = []
 
     for basis, detail in zip(alle_stellenangebote, alle_details):
             beschreibung = detail.get("stellenangebotsBeschreibung", "")
-            text_string = f"{basis['beruf']} - {basis['titel']}, bei {basis['arbeitgeber']}, {beschreibung}"
+            text_string = f"{basis['hauptberuf']} - {basis['stellenangebotsTitel']}, bei {basis['firma']}, {beschreibung}"
             job_texte.append(text_string)
 
     rechts_geswipte_jobs = hole_swipe_jobs(profil.nutzer_id, "rechts")
