@@ -54,7 +54,6 @@ app = FastAPI()
 model = SentenceTransformer('all-MiniLM-L6-v2')
 
 class NutzerProfil(BaseModel):
-    profil_text: str
     fachbereich: list[str]
     nutzer_id : int
     ort: str
@@ -64,6 +63,22 @@ class ChatNachricht(BaseModel):
     nutzer_id: int
 
 client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+
+SYSTEM_PROMPT = """Du bist ein hilfreicher Karriereberater. Antworte immer auf Deutsch.
+
+    Stelle gezielte Fragen, um Folgendes über den Nutzer herauszufinden:
+    - Abschluss/Ausbildung
+    - Berufserfahrung (Jahre, Rollen)
+    - Fachliche Skills (z.B. Software, Methoden, Sprachen)
+    - Berufliche Interessen/Präferenzen (z.B. bevorzugte Branche, Arbeitsweise)
+
+    Stelle die Fragen nacheinander, nicht alle auf einmal. Sobald du genug Informationen gesammelt hast, fasse das Profil des Nutzers strukturiert zusammen, z.B. so:
+
+    PROFIL:
+    - Abschluss: ...
+    - Erfahrung: ...
+    - Skills: ...
+    - Interessen: ..."""
 
 async def suche_jobs(client, headers, fachbereich, ort):
     params = {"was": fachbereich, "wo": ort, "page": 1, "size": 10}
@@ -84,7 +99,11 @@ def hole_chat_historie(nutzer_id: int):
 
 async def chatte(chatnachricht: ChatNachricht):
     bisherige_historie = hole_chat_historie(chatnachricht.nutzer_id)
-    chat = client.aio.chats.create(model="gemini-flash-latest", history=bisherige_historie)
+    
+    chat = client.aio.chats.create(model="gemini-flash-latest", 
+                                   history=bisherige_historie,
+                                   config={"system_instruction": SYSTEM_PROMPT}
+                                    )
     response = await chat.send_message(chatnachricht.nachricht)
 
     neue_nutzer_nachricht = ChatNachrichtDB(nutzer_id= chatnachricht.nutzer_id, rolle="user", inhalt= chatnachricht.nachricht)
@@ -93,6 +112,23 @@ async def chatte(chatnachricht: ChatNachricht):
     session.add(neue_nutzer_nachricht)
     session.add(neue_ki_nachricht)
     session.commit()
+
+    if "PROFIL:" in response.text:
+        profil = {}
+        for zeile in response.text.split("\n"):
+            if zeile.startswith("- "):
+                neue_zeile = zeile.replace("**", "").replace("- ", "")
+                teile = neue_zeile.split(":", 1)
+                feldname, wert = teile
+                profil[feldname.strip()] = wert.strip()
+        werte_liste = []
+        for wert in profil.values():
+            werte_liste.append(wert)
+        nutzerprofil_text = ", ".join(werte_liste)
+
+        nutzer = session.query(Nutzer).filter(Nutzer.id == chatnachricht.nutzer_id).first()
+        nutzer.profil_text = nutzerprofil_text
+        session.commit()
 
     return {"antwort": response.text}
 
@@ -138,6 +174,8 @@ async def hole_jobdetails(client, referenznummer, headers):
 async def finde_jobs(profil: NutzerProfil):
     headers = {"X-API-Key": "jobboerse-jobsuche"}
     logger.info(f"Matching-Anfrage für Nutzer {profil.nutzer_id}")
+    nutzer = session.query(Nutzer).filter(Nutzer.id == profil.nutzer_id).first()
+    profil_text = nutzer.profil_text
     
     async with httpx.AsyncClient() as client:
         aufgaben_suche = [suche_jobs(client,headers, fach, profil.ort) for fach in profil.fachbereich]
@@ -170,8 +208,8 @@ async def finde_jobs(profil: NutzerProfil):
 
     rechts_geswipte_jobs = hole_swipe_jobs(profil.nutzer_id, "rechts")
     links_geswipte_jobs = hole_swipe_jobs(profil.nutzer_id, "links")
-
-    profil_embedding = model.encode(profil.profil_text)
+ 
+    profil_embedding = model.encode(profil_text)
     
     aehnlichkeiten = []
     for job_text in job_texte:
