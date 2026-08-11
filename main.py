@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import numpy as np
 from sentence_transformers import SentenceTransformer
@@ -99,13 +99,17 @@ def hole_chat_historie(nutzer_id: int):
 
 async def chatte(chatnachricht: ChatNachricht):
     bisherige_historie = hole_chat_historie(chatnachricht.nutzer_id)
-    
-    chat = client.aio.chats.create(model="gemini-flash-latest", 
-                                   history=bisherige_historie,
-                                   config={"system_instruction": SYSTEM_PROMPT}
-                                    )
-    response = await chat.send_message(chatnachricht.nachricht)
 
+    try:
+
+        chat = client.aio.chats.create(model="gemini-flash-latest", 
+                                    history=bisherige_historie,
+                                    config={"system_instruction": SYSTEM_PROMPT}
+                                        )
+        response = await chat.send_message(chatnachricht.nachricht)
+
+    except Exception:
+        raise HTTPException(status_code=503, detail="Der Chat ist momentan nicht erreichbar, bitte später erneut versuchen")
     neue_nutzer_nachricht = ChatNachrichtDB(nutzer_id= chatnachricht.nutzer_id, rolle="user", inhalt= chatnachricht.nachricht)
     neue_ki_nachricht = ChatNachrichtDB(nutzer_id= chatnachricht.nutzer_id, rolle="model", inhalt= response.text )
 
@@ -177,24 +181,29 @@ async def finde_jobs(profil: NutzerProfil):
     nutzer = session.query(Nutzer).filter(Nutzer.id == profil.nutzer_id).first()
     profil_text = nutzer.profil_text
     
-    async with httpx.AsyncClient() as client:
-        aufgaben_suche = [suche_jobs(client,headers, fach, profil.ort) for fach in profil.fachbereich]
-        alle_suchergebnisse = await asyncio.gather(*aufgaben_suche)
+    try:
+        async with httpx.AsyncClient() as client:
+            aufgaben_suche = [suche_jobs(client,headers, fach, profil.ort) for fach in profil.fachbereich]
+            alle_suchergebnisse = await asyncio.gather(*aufgaben_suche)
+    
+    
+            alle_stellenangebote = []
+            gesehene_refnrs = set()
 
-        alle_stellenangebote = []
-        gesehene_refnrs = set()
+            for suchergebnis in alle_suchergebnisse:
+                if "ergebnisliste" in suchergebnis:
+                    for job in suchergebnis["ergebnisliste"]:
+                        if job["referenznummer"] not in gesehene_refnrs:
+                            alle_stellenangebote.append(job)
+                            gesehene_refnrs.add(job["referenznummer"])
 
-        for suchergebnis in alle_suchergebnisse:
-            if "ergebnisliste" in suchergebnis:
-                for job in suchergebnis["ergebnisliste"]:
-                    if job["referenznummer"] not in gesehene_refnrs:
-                        alle_stellenangebote.append(job)
-                        gesehene_refnrs.add(job["referenznummer"])
-
-        logger.info(f"{len(alle_stellenangebote)} Jobs gefunden (nach Duplikat-Filterung)")
+            logger.info(f"{len(alle_stellenangebote)} Jobs gefunden (nach Duplikat-Filterung)")
                 
-        aufgaben = [hole_jobdetails(client, job["referenznummer"], headers) for job in alle_stellenangebote]
-        alle_details = await asyncio.gather(*aufgaben)
+            aufgaben = [hole_jobdetails(client, job["referenznummer"], headers) for job in alle_stellenangebote]
+            alle_details = await asyncio.gather(*aufgaben)
+
+    except Exception:
+        raise HTTPException(status_code=503, detail="Jobsuche momentan nicht verfügbar") 
        
     job_texte = []
 
@@ -212,6 +221,7 @@ async def finde_jobs(profil: NutzerProfil):
     profil_embedding = model.encode(profil_text)
     
     aehnlichkeiten = []
+
     for job_text in job_texte:
         job_embedding = model.encode(job_text)
         basis_wert = cosine_similarity(profil_embedding, job_embedding)
@@ -230,8 +240,6 @@ async def finde_jobs(profil: NutzerProfil):
         ergebnis.append({"job": job, "aehnlichkeit": float(wert)})
     
     return ergebnis
-
-
 
 @app.get("/matches/{nutzer_id}")
 
