@@ -19,3 +19,5 @@ jobs:
       
       - name: Tests ausführen
         run: pytest
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
