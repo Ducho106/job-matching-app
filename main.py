@@ -169,7 +169,7 @@ async def hole_jobdetails(client, referenznummer, headers):
     response = await client.get(url, headers=headers)
     return response.json()
 
-@app.post("/matching")
+@app.post("/matching") 
 
 async def finde_jobs(profil: NutzerProfil):
     headers = {"X-API-Key": "jobboerse-jobsuche"}
@@ -259,6 +259,12 @@ def hole_swipes(nutzer_id: int):
         ergebnis.append({"job_titel": swipe.job_titel, "richtung": swipe.richtung})
     return ergebnis
 
+@app.post("/nutzer")
+def erstelle_nutzer():
+    neuer_nutzer = Nutzer()
+    session.add(neuer_nutzer)
+    session.commit()
+    return {"id": neuer_nutzer.id}
 
 
 
