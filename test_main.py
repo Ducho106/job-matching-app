@@ -26,9 +26,9 @@ def test_hole_chat_historie():
     fake_nachricht.rolle = "user"
     fake_nachricht.inhalt = "Hallo"
     
-    with patch("main.session") as mock_session:
-        mock_session.query.return_value.filter.return_value.all.return_value = [fake_nachricht]
-        
-        ergebnis = hole_chat_historie(1)
-        
-        assert ergebnis == [{"role": "user", "parts": [{"text": "Hallo"}]}]
+    mock_db = MagicMock()
+    mock_db.query.return_value.filter.return_value.all.return_value = [fake_nachricht]
+    
+    ergebnis = hole_chat_historie(1, mock_db)
+    
+    assert ergebnis == [{"role": "user", "parts": [{"text": "Hallo"}]}]

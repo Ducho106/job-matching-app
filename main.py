@@ -13,6 +13,7 @@ import asyncio
 import httpx
 from dotenv import load_dotenv 
 import logging
+from contextlib import asynccontextmanager
 
 load_dotenv()
 
@@ -55,6 +56,14 @@ def get_db():
         db.close()
 
 app = FastAPI()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    Base.metadata.create_all(engine)
+    yield
+
+app = FastAPI(lifespan=lifespan)
+
 model = SentenceTransformer('all-MiniLM-L6-v2')
 
 class NutzerProfil(BaseModel):
