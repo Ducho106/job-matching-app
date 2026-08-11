@@ -1,13 +1,12 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel
 import numpy as np
 from sentence_transformers import SentenceTransformer
 import os
 from google import genai
 from sqlalchemy import Column, Integer, String, ForeignKey
-from sqlalchemy.orm import declarative_base
+from sqlalchemy.orm import declarative_base, sessionmaker, Session
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
 import requests
 import base64
 import asyncio
@@ -48,7 +47,12 @@ class ChatNachrichtDB(Base):
 Base.metadata.create_all(engine)
 
 SessionLocal = sessionmaker(bind=engine)
-session = SessionLocal()
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
 app = FastAPI()
 model = SentenceTransformer('all-MiniLM-L6-v2')
@@ -86,8 +90,8 @@ async def suche_jobs(client, headers, fachbereich, ort):
     response = await client.get(url, headers=headers, params=params)
     return response.json()
 
-def hole_chat_historie(nutzer_id: int):
-    alle_chats = session.query(ChatNachrichtDB).filter(ChatNachrichtDB.nutzer_id == nutzer_id).all()
+def hole_chat_historie(nutzer_id: int, db: Session):
+    alle_chats = db.query(ChatNachrichtDB).filter(ChatNachrichtDB.nutzer_id == nutzer_id).all()
 
     chats = []
 
@@ -97,8 +101,8 @@ def hole_chat_historie(nutzer_id: int):
 
 @app.post("/chat")
 
-async def chatte(chatnachricht: ChatNachricht):
-    bisherige_historie = hole_chat_historie(chatnachricht.nutzer_id)
+async def chatte(chatnachricht: ChatNachricht, db: Session = Depends(get_db)):
+    bisherige_historie = hole_chat_historie(chatnachricht.nutzer_id, db)
 
     try:
 
@@ -113,9 +117,9 @@ async def chatte(chatnachricht: ChatNachricht):
     neue_nutzer_nachricht = ChatNachrichtDB(nutzer_id= chatnachricht.nutzer_id, rolle="user", inhalt= chatnachricht.nachricht)
     neue_ki_nachricht = ChatNachrichtDB(nutzer_id= chatnachricht.nutzer_id, rolle="model", inhalt= response.text )
 
-    session.add(neue_nutzer_nachricht)
-    session.add(neue_ki_nachricht)
-    session.commit()
+    db.add(neue_nutzer_nachricht)
+    db.add(neue_ki_nachricht)
+    db.commit()
 
     if "PROFIL:" in response.text:
         profil = {}
@@ -130,9 +134,9 @@ async def chatte(chatnachricht: ChatNachricht):
             werte_liste.append(wert)
         nutzerprofil_text = ", ".join(werte_liste)
 
-        nutzer = session.query(Nutzer).filter(Nutzer.id == chatnachricht.nutzer_id).first()
+        nutzer = db.query(Nutzer).filter(Nutzer.id == chatnachricht.nutzer_id).first()
         nutzer.profil_text = nutzerprofil_text
-        session.commit()
+        db.commit()
 
     return {"antwort": response.text}
 
@@ -142,8 +146,8 @@ def cosine_similarity(vektor_a, vektor_b):
     norm_b = np.linalg.norm(vektor_b)
     return dot_product / (norm_a * norm_b)
 
-def hole_swipe_jobs(nutzer_id: int, richtung: str):
-    swipes = session.query(Swipe).filter(Swipe.nutzer_id == nutzer_id).filter(Swipe.richtung == richtung).all()
+def hole_swipe_jobs(nutzer_id: int, richtung: str, db: Session):
+    swipes = db.query(Swipe).filter(Swipe.nutzer_id == nutzer_id).filter(Swipe.richtung == richtung).all()
 
     alle_jobtitel = []
 
@@ -175,10 +179,10 @@ async def hole_jobdetails(client, referenznummer, headers):
 
 @app.post("/matching") 
 
-async def finde_jobs(profil: NutzerProfil):
+async def finde_jobs(profil: NutzerProfil, db: Session = Depends(get_db)):
     headers = {"X-API-Key": "jobboerse-jobsuche"}
     logger.info(f"Matching-Anfrage für Nutzer {profil.nutzer_id}")
-    nutzer = session.query(Nutzer).filter(Nutzer.id == profil.nutzer_id).first()
+    nutzer = db.query(Nutzer).filter(Nutzer.id == profil.nutzer_id).first()
     profil_text = nutzer.profil_text
     
     try:
@@ -215,8 +219,8 @@ async def finde_jobs(profil: NutzerProfil):
             text_string = f"{beruf} - {titel}, bei {firma}, {beschreibung}"
             job_texte.append(text_string)
 
-    rechts_geswipte_jobs = hole_swipe_jobs(profil.nutzer_id, "rechts")
-    links_geswipte_jobs = hole_swipe_jobs(profil.nutzer_id, "links")
+    rechts_geswipte_jobs = hole_swipe_jobs(profil.nutzer_id, "rechts", db)
+    links_geswipte_jobs = hole_swipe_jobs(profil.nutzer_id, "links", db)
  
     profil_embedding = model.encode(profil_text)
     
@@ -243,8 +247,8 @@ async def finde_jobs(profil: NutzerProfil):
 
 @app.get("/matches/{nutzer_id}")
 
-def hole_matches(nutzer_id: int):
-    return hole_swipe_jobs(nutzer_id, "rechts")
+def hole_matches(nutzer_id: int, db: Session = Depends(get_db)):
+    return hole_swipe_jobs(nutzer_id, "rechts", db)
 
 class SwipeAktion(BaseModel):
     job_titel: str
@@ -252,15 +256,15 @@ class SwipeAktion(BaseModel):
     nutzer_id: int
 
 @app.post("/swipe")
-def swipen(swipeaktion: SwipeAktion):
+def swipen(swipeaktion: SwipeAktion, db: Session = Depends(get_db)):
     neuer_swipe = Swipe(nutzer_id=swipeaktion.nutzer_id, job_titel=swipeaktion.job_titel, richtung=swipeaktion.richtung)
-    session.add(neuer_swipe)
-    session.commit()
+    db.add(neuer_swipe)
+    db.commit()
     return {"id": neuer_swipe.id, "job_titel": neuer_swipe.job_titel, "richtung": neuer_swipe.richtung}
 
 @app.get("/swipes/{nutzer_id}")
-def hole_swipes(nutzer_id: int):
-    alle_swipes = session.query(Swipe).filter(Swipe.nutzer_id == nutzer_id).all()
+def hole_swipes(nutzer_id: int, db: Session = Depends(get_db)):
+    alle_swipes = db.query(Swipe).filter(Swipe.nutzer_id == nutzer_id).all()
 
     ergebnis = []
     for swipe in alle_swipes:
@@ -268,10 +272,10 @@ def hole_swipes(nutzer_id: int):
     return ergebnis
 
 @app.post("/nutzer")
-def erstelle_nutzer():
+def erstelle_nutzer(db: Session = Depends(get_db)):
     neuer_nutzer = Nutzer()
-    session.add(neuer_nutzer)
-    session.commit()
+    db.add(neuer_nutzer)
+    db.commit()
     return {"id": neuer_nutzer.id}
 
 
