@@ -14,9 +14,15 @@ import httpx
 from dotenv import load_dotenv 
 import logging
 from contextlib import asynccontextmanager
+import bcrypt
 
 load_dotenv()
 
+def hash_passwort(passwort: str) -> str:
+    return bcrypt.hashpw(passwort.encode(), bcrypt.gensalt()).decode()
+
+def pruefe_passwort(passwort: str, gespeicherter_hash: str) -> bool:
+    return bcrypt.checkpw(passwort.encode(), gespeicherter_hash.encode())
 Base = declarative_base()
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://localhost/job_matching_db")
 engine = create_engine(DATABASE_URL)
@@ -29,6 +35,8 @@ class Nutzer(Base):
     
     id = Column(Integer, primary_key=True)
     profil_text = Column(String)
+    email = Column(String, unique=True)
+    passwort_hash = Column(String)
 
 class Swipe(Base):
     __tablename__ = "swipes"
@@ -57,7 +65,6 @@ app = FastAPI()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    Base.metadata.create_all(engine)
     yield
 
 app = FastAPI(lifespan=lifespan)
@@ -285,5 +292,21 @@ def erstelle_nutzer(db: Session = Depends(get_db)):
     db.commit()
     return {"id": neuer_nutzer.id}
 
+class Registrierung(BaseModel):
+    email: str
+    passwort: str
 
+@app.post("/registrierung")
+def registriere(daten: Registrierung, db: Session = Depends(get_db)):
 
+    vorhandener_nutzer = db.query(Nutzer).filter(Nutzer.email == daten.email).first()
+    if vorhandener_nutzer:
+        raise HTTPException(status_code=400, detail="Diese Eingabe ist ungültig.")
+
+    gehashtes_passwort = hash_passwort(daten.passwort)
+    neuer_nutzer = Nutzer(email=daten.email, passwort_hash=gehashtes_passwort)
+
+    db.add(neuer_nutzer)
+    db.commit()
+
+    return {"id": neuer_nutzer.id}
